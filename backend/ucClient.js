@@ -1,44 +1,50 @@
-import 'dotenv/config';
-
 const BASE = 'https://registration9.uc.cl/StudentRegistrationSsb/ssb';
 
 const UNIQUE_SESSION_ID = `nwsef${Date.now()}`;
 
-function buildCookieHeader() {
+function buildCookieHeader(session) {
   const parts = [];
-  if (process.env.UC_JSESSIONID) parts.push(`JSESSIONID=${process.env.UC_JSESSIONID}`);
-  if (process.env.UC_RBDI_COOKIE) parts.push(`RbdI6CHvhzrLAA1Q6g__=${process.env.UC_RBDI_COOKIE}`);
-  if (process.env.UC_CF_CLEARANCE) parts.push(`cf_clearance=${process.env.UC_CF_CLEARANCE}`);
-  if (process.env.UC_QUEUEIT_COOKIE_NAME && process.env.UC_QUEUEIT_COOKIE_VALUE) {
-    parts.push(`${process.env.UC_QUEUEIT_COOKIE_NAME}=${process.env.UC_QUEUEIT_COOKIE_VALUE}`);
-  }
+  if (session.jsessionId) parts.push(`JSESSIONID=${session.jsessionId}`);
+  if (session.rbdiCookie) parts.push(`RbdI6CHvhzrLAA1Q6g__=${session.rbdiCookie}`);
   return parts.join('; ');
 }
 
-function commonHeaders(extra = {}) {
+function commonHeaders(session, extra = {}) {
   return {
     Accept: 'application/json, text/javascript, */*; q=0.01',
     'Accept-Language': 'en-US,en;q=0.9,es-CL;q=0.8,es;q=0.7',
     'Cache-Control': 'no-cache',
-    Cookie: buildCookieHeader(),
+    Cookie: buildCookieHeader(session),
     Pragma: 'no-cache',
     Referer: `${BASE}/classSearch/classSearch`,
     'User-Agent':
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
     'X-Requested-With': 'XMLHttpRequest',
-    'X-Synchronizer-Token': process.env.UC_SYNCHRONIZER_TOKEN ?? '',
+    'X-Synchronizer-Token': session.synchronizerToken ?? '',
     ...extra,
   };
+}
+
+// UC's searchResults endpoint keeps server-side search-form state across
+// calls within the same session -- filters from a previous search silently
+// linger unless resetDataForm is called first, or a later search that
+// omits a filter still gets the earlier filter's results. Discovered by
+// testing filters back-to-back and seeing stale results until this was
+// added before every search.
+async function resetSearchForm(session) {
+  await fetch(`${BASE}/classSearch/resetDataForm`, {
+    headers: commonHeaders(session),
+  });
 }
 
 // UC session tracks "which term" server-side, separate from the JSESSIONID.
 // A stale/never-set term makes searchResults come back empty, so every
 // search call re-selects the term first. Cheap and avoids a hidden bug
 // where the first search of a session used the wrong term.
-async function selectTerm(term) {
+async function selectTerm(term, session) {
   const res = await fetch(`${BASE}/term/search?mode=search`, {
     method: 'POST',
-    headers: commonHeaders({
+    headers: commonHeaders(session, {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
       Origin: 'https://registration9.uc.cl',
       Referer: `${BASE}/term/termSelection?mode=search`,
@@ -107,17 +113,17 @@ function formatTime(hhmm) {
   return `${hhmm.slice(0, 2)}:${hhmm.slice(2)}`;
 }
 
-// EXAM slots are one-off calendar dates (not a weekly recurring class time),
-// unlike CLAS/TAL/INT* which repeat on the flagged weekdays -- they need
-// separate rendering in the UI, so split them out here instead of in React.
+// Which meeting-type codes are one-off assessments (Interrogación N, exams)
+// vs genuine weekly classes is course-specific -- some courses go up to
+// INT3/INT4, and there's no fixed list Banner exposes. So the backend no
+// longer guesses: it hands back every meeting block as-is (with its raw
+// type, description, and date range), and the frontend lets the user
+// decide per block what belongs on their weekly grid.
 function normalizeSection(raw) {
-  const meetings = (raw.meetingsFaculty ?? []).map((m) => m.meetingTime).filter(Boolean);
-
-  const weekly = [];
-  const exams = [];
-
-  for (const mt of meetings) {
-    const entry = {
+  const meetings = (raw.meetingsFaculty ?? [])
+    .map((m) => m.meetingTime)
+    .filter(Boolean)
+    .map((mt) => ({
       type: mt.meetingType,
       typeDescription: decodeHtmlEntities(mt.meetingTypeDescription),
       beginTime: formatTime(mt.beginTime),
@@ -127,10 +133,7 @@ function normalizeSection(raw) {
       room: mt.room && mt.room !== 'SIN SALA' ? mt.room : null,
       startDate: mt.startDate,
       endDate: mt.endDate,
-    };
-    if (mt.meetingType === 'EXAM') exams.push(entry);
-    else weekly.push(entry);
-  }
+    }));
 
   return {
     nrc: raw.courseReferenceNumber,
@@ -150,16 +153,26 @@ function normalizeSection(raw) {
       name: cleanFacultyName(f.displayName),
       email: f.emailAddress,
     })),
-    weeklySchedule: weekly,
-    exams,
+    meetings,
   };
 }
 
-export async function searchCourse({ subjectCourse, term, pageOffset = 0, pageMaxSize = 20 }) {
-  await selectTerm(term);
-
+// UC's search actually honors these as query params on searchResults (all
+// verified live, several rounds -- some only after realizing stale
+// server-side form state needed resetDataForm between attempts):
+//   txt_subjectcoursecombo, txt_subject, txt_courseNumber, txt_instructor,
+//   txt_instructionalMethod, txt_college, txt_campus, txt_attribute,
+//   txt_partOfTerm, chk_open_only, chk_include_{0-6} (day of week, 0=Sunday
+//   per Banner's firstDayOfTheWeek config), select_start_/end_hour/min/ampm.
+//
+// txt_courseTitle, txt_keywordany, txt_keywordlike, txt_credithourlow, and
+// txt_credithourhigh are real form fields but don't filter server-side
+// (verified live -- results came back identical to unfiltered regardless
+// of value). They're deliberately NOT supported here: correctly filtering
+// by them would require fetching every section in the term instead of one
+// page, which is too expensive to do on every search.
+function buildSearchParams({ subjectCourse, term, pageOffset, pageMaxSize, filters }) {
   const params = new URLSearchParams({
-    txt_subjectcoursecombo: subjectCourse,
     txt_term: term,
     startDatepicker: '',
     endDatepicker: '',
@@ -170,8 +183,55 @@ export async function searchCourse({ subjectCourse, term, pageOffset = 0, pageMa
     sortDirection: 'asc',
   });
 
+  if (subjectCourse) params.set('txt_subjectcoursecombo', subjectCourse);
+  if (filters.subject) params.set('txt_subject', filters.subject);
+  if (filters.courseNumber) params.set('txt_courseNumber', filters.courseNumber);
+  if (filters.instructor) params.set('txt_instructor', filters.instructor);
+  if (filters.instructionalMethod) params.set('txt_instructionalMethod', filters.instructionalMethod);
+  if (filters.college) params.set('txt_college', filters.college);
+  if (filters.campus) params.set('txt_campus', filters.campus);
+  if (filters.attribute) params.set('txt_attribute', filters.attribute);
+  if (filters.partOfTerm) params.set('txt_partOfTerm', filters.partOfTerm);
+  if (filters.openOnly) params.set('chk_open_only', 'true');
+
+  for (const dow of filters.daysOfWeek ?? []) {
+    params.set(`chk_include_${dow}`, 'true');
+  }
+
+  if (filters.startTime) {
+    const { hour, min, ampm } = filters.startTime;
+    params.set('select_start_hour', hour);
+    params.set('select_start_min', min);
+    params.set('select_start_ampm', ampm);
+  }
+  if (filters.endTime) {
+    const { hour, min, ampm } = filters.endTime;
+    params.set('select_end_hour', hour);
+    params.set('select_end_min', min);
+    params.set('select_end_ampm', ampm);
+  }
+
+  return params;
+}
+
+export async function searchCourse({
+  subjectCourse,
+  term,
+  pageOffset = 0,
+  pageMaxSize = 20,
+  session,
+  filters = {},
+}) {
+  if (!session) {
+    throw new AuthExpiredError();
+  }
+  await resetSearchForm(session);
+  await selectTerm(term, session);
+
+  const params = buildSearchParams({ subjectCourse, term, pageOffset, pageMaxSize, filters });
+
   const res = await fetch(`${BASE}/searchResults/searchResults?${params.toString()}`, {
-    headers: commonHeaders(),
+    headers: commonHeaders(session),
   });
 
   if (!isAuthenticated(res)) {
@@ -179,12 +239,97 @@ export async function searchCourse({ subjectCourse, term, pageOffset = 0, pageMa
   }
 
   const json = await res.json();
+  const sections = (json.data ?? []).map(normalizeSection);
 
   return {
     success: json.success ?? false,
-    totalCount: json.totalCount ?? 0,
-    sections: (json.data ?? []).map(normalizeSection),
+    totalCount: json.totalCount ?? sections.length,
+    sections,
   };
+}
+
+const CACHEABLE_LOOKUPS = {
+  attribute: 'get_attribute',
+  partOfTerm: 'get_partOfTerm',
+  campus: 'get_campus',
+  instructionalMethod: 'get_instructionalMethod',
+  college: 'get_college',
+  subject: 'get_subject',
+};
+
+// These are small, closed catalogs (a few dozen to ~250 entries) that
+// don't change within a term, unlike get_instructor/get_subjectcoursecombo
+// which are large, paginated, and meant to be searched live. Cached per
+// term since nothing confirms they're identical across terms.
+const lookupCache = new Map();
+
+async function fetchLookup(endpoint, term, session) {
+  const params = new URLSearchParams({
+    searchTerm: '',
+    term,
+    offset: '1',
+    max: '1000',
+    uniqueSessionId: UNIQUE_SESSION_ID,
+  });
+  const res = await fetch(`${BASE}/classSearch/${endpoint}?${params.toString()}`, {
+    headers: commonHeaders(session),
+  });
+
+  if (!isAuthenticated(res)) {
+    throw new AuthExpiredError();
+  }
+
+  const json = await res.json();
+  return json.map((item) => ({
+    code: item.code,
+    description: decodeHtmlEntities(item.description),
+  }));
+}
+
+export async function getFilterOptions(term, session) {
+  if (!session) {
+    throw new AuthExpiredError();
+  }
+
+  const cacheKey = term;
+  if (lookupCache.has(cacheKey)) {
+    return lookupCache.get(cacheKey);
+  }
+
+  const entries = await Promise.all(
+    Object.entries(CACHEABLE_LOOKUPS).map(async ([key, endpoint]) => [
+      key,
+      await fetchLookup(endpoint, term, session),
+    ])
+  );
+  const options = Object.fromEntries(entries);
+  lookupCache.set(cacheKey, options);
+  return options;
+}
+
+// get_instructor is a large, paginated, live-searched catalog (thousands
+// of instructors), unlike the small closed lists in CACHEABLE_LOOKUPS --
+// never cache the full set, always query with the user's actual search term.
+export async function searchInstructors(query, term, session) {
+  if (!session) {
+    throw new AuthExpiredError();
+  }
+
+  const params = new URLSearchParams({
+    searchTerm: query,
+    term,
+    offset: '1',
+    max: '10',
+    uniqueSessionId: UNIQUE_SESSION_ID,
+  });
+  const res = await fetch(`${BASE}/classSearch/get_instructor?${params.toString()}`, {
+    headers: commonHeaders(session),
+  });
+  if (!isAuthenticated(res)) {
+    throw new AuthExpiredError();
+  }
+  const json = await res.json();
+  return json.map((item) => ({ code: item.code, description: decodeHtmlEntities(item.description) }));
 }
 
 export { AuthExpiredError };

@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import { shortDays } from './days';
+import { isInHorario } from './horarioStore';
+import { AddToHorarioPicker } from './AddToHorarioPicker';
 
 function SeatBadge({ seatsAvailable, maximumEnrollment }) {
   const full = seatsAvailable <= 0;
@@ -22,7 +25,10 @@ function MeetingRow({ meeting }) {
   );
 }
 
-export function SectionCard({ section }) {
+export function SectionCard({ section, onAddToHorario }) {
+  const alreadyAdded = isInHorario(section.nrc);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   return (
     <article className="section-card">
       <header className="section-card__header">
@@ -30,7 +36,17 @@ export function SectionCard({ section }) {
           <h3>{section.subjectCourse} &middot; Sección {section.section}</h3>
           <p className="section-card__title">{section.title}</p>
         </div>
-        <SeatBadge seatsAvailable={section.seatsAvailable} maximumEnrollment={section.maximumEnrollment} />
+        <div className="section-card__header-actions">
+          <SeatBadge seatsAvailable={section.seatsAvailable} maximumEnrollment={section.maximumEnrollment} />
+          <button
+            type="button"
+            className={`add-to-horario-btn ${alreadyAdded ? 'add-to-horario-btn--added' : ''}`}
+            onClick={() => setPickerOpen(true)}
+            disabled={alreadyAdded}
+          >
+            {alreadyAdded ? '✓ en tu horario' : '+ agregar a mi horario'}
+          </button>
+        </div>
       </header>
 
       <dl className="section-card__meta">
@@ -58,23 +74,20 @@ export function SectionCard({ section }) {
         </p>
       )}
 
-      {section.weeklySchedule.length > 0 && (
+      {section.meetings.length > 0 && (
         <ul className="meeting-list">
-          {section.weeklySchedule.map((m, i) => (
+          {section.meetings.map((m, i) => (
             <MeetingRow key={i} meeting={m} />
           ))}
         </ul>
       )}
 
-      {section.exams.length > 0 && (
-        <details className="section-card__exams">
-          <summary>Exámenes</summary>
-          <ul className="meeting-list">
-            {section.exams.map((m, i) => (
-              <MeetingRow key={i} meeting={m} />
-            ))}
-          </ul>
-        </details>
+      {pickerOpen && (
+        <AddToHorarioPicker
+          section={section}
+          onClose={() => setPickerOpen(false)}
+          onAdded={(updated) => onAddToHorario?.(updated)}
+        />
       )}
     </article>
   );
