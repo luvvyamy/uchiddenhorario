@@ -72,3 +72,8 @@ export async function searchInstructors(query, term, token) {
   const res = await authedGet(`/api/instructors?${new URLSearchParams({ term, q: query })}`, token);
   return handleResponse(res, 'Tu sesión de búsqueda expiró, se creará una nueva.');
 }
+
+export async function searchSubjectCourseCombos(query, term, token) {
+  const res = await authedGet(`/api/subject-course-combos?${new URLSearchParams({ term, q: query })}`, token);
+  return handleResponse(res, 'Tu sesión de búsqueda expiró, se creará una nueva.');
+}

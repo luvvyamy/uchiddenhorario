@@ -6,6 +6,7 @@ import {
   searchCourse,
   getFilterOptions,
   searchInstructors,
+  searchSubjectCourseCombos,
   createAnonymousUcSession,
   AuthExpiredError,
 } from './ucClient.js';
@@ -174,6 +175,20 @@ app.get('/api/instructors', requireSession, async (req, res) => {
 
   try {
     const results = await searchInstructors(q ? String(q) : '', String(term), req.ucSession);
+    res.json(results);
+  } catch (err) {
+    handleUcError(res, err);
+  }
+});
+
+app.get('/api/subject-course-combos', requireSession, async (req, res) => {
+  const { term, q } = req.query;
+  if (!term) {
+    return res.status(400).json({ error: 'term is required' });
+  }
+
+  try {
+    const results = await searchSubjectCourseCombos(q ? String(q) : '', String(term), req.ucSession);
     res.json(results);
   } catch (err) {
     handleUcError(res, err);

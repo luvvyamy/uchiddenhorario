@@ -105,6 +105,11 @@ button, input, select {
   min-width: 160px;
 }
 
+.search-form .typeahead {
+  flex: 1;
+  min-width: 160px;
+}
+
 .search-form button {
   background: var(--accent);
   color: #fff;

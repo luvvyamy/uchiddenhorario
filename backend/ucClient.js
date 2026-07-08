@@ -392,4 +392,32 @@ export async function searchInstructors(query, term, session) {
   return json.map((item) => ({ code: item.code, description: decodeHtmlEntities(item.description) }));
 }
 
+// txt_subjectcoursecombo (the "Sigla" field) only matches a COMPLETE sigla
+// exactly -- searching "IIC" or "IIC3" against searchResults itself
+// returns zero results, it's not a prefix search. get_subjectcoursecombo
+// is the actual autocomplete Banner's own UI calls as you type, and it
+// DOES prefix-match ("IIC3" -> IIC3103, IIC3104, ...), so partial sigla
+// input has to go through this instead of straight to search.
+export async function searchSubjectCourseCombos(query, term, session) {
+  if (!session) {
+    throw new AuthExpiredError();
+  }
+
+  const params = new URLSearchParams({
+    searchTerm: query,
+    term,
+    offset: '1',
+    max: '15',
+    uniqueSessionId: UNIQUE_SESSION_ID,
+  });
+  const res = await fetch(`${BASE}/classSearch/get_subjectcoursecombo?${params.toString()}`, {
+    headers: commonHeaders(session),
+  });
+  if (!isAuthenticated(res)) {
+    throw new AuthExpiredError();
+  }
+  const json = await res.json();
+  return json.map((item) => ({ code: item.code, description: decodeHtmlEntities(item.description) }));
+}
+
 export { AuthExpiredError };

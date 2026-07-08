@@ -3,6 +3,7 @@ import { createAnonymousSession, searchCourse, AuthExpiredError } from './api';
 import { SectionCard } from './SectionCard';
 import { HorarioGrid } from './HorarioGrid';
 import { AdvancedFilters } from './AdvancedFilters';
+import { SubjectCourseTypeahead } from './SubjectCourseTypeahead';
 import { listHorario } from './horarioStore';
 
 const DEFAULT_TERM = '202622'; // 2026 Segundo Semestre
@@ -84,12 +85,11 @@ function App() {
 
       {authToken && (
         <form className="search-form" onSubmit={handleSubmit}>
-          <input
-            type="text"
-            placeholder="Ej: IIC2133"
+          <SubjectCourseTypeahead
             value={subjectCourse}
-            onChange={(e) => setSubjectCourse(e.target.value)}
-            autoFocus
+            onChange={setSubjectCourse}
+            term={term}
+            token={authToken}
           />
           <select value={term} onChange={(e) => setTerm(e.target.value)}>
             <option value="202622">2026 Segundo Semestre</option>
