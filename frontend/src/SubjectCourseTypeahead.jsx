@@ -10,24 +10,47 @@ import { searchSubjectCourseCombos } from './api';
 export function SubjectCourseTypeahead({ value, onChange, term, token }) {
   const [results, setResults] = useState([]);
   const debounceRef = useRef(null);
+  // Bumped on every pick (and every keystroke) so an in-flight fetch from
+  // a stale request can tell it's stale and skip its own setResults --
+  // otherwise a suggestion clicked right as a previous fetch resolves
+  // would still get overwritten back open by that late response.
+  const requestIdRef = useRef(0);
+  // Set right after a suggestion is picked, so the effect that fires on
+  // `value` changing knows this particular change was a selection, not
+  // the user typing -- otherwise get_subjectcoursecombo happily matches
+  // the now-complete sigla against itself and repopulates `results`
+  // right after pick() cleared it, making the dropdown pop back open.
+  const justPickedRef = useRef(false);
 
   useEffect(() => {
+    if (justPickedRef.current) {
+      justPickedRef.current = false;
+      return;
+    }
     if (!token || !value || value.length < 2) {
       setResults([]);
       return;
     }
     clearTimeout(debounceRef.current);
+    const requestId = ++requestIdRef.current;
     debounceRef.current = setTimeout(() => {
       searchSubjectCourseCombos(value, term, token)
-        .then(setResults)
-        .catch(() => setResults([]));
+        .then((r) => {
+          if (requestIdRef.current === requestId) setResults(r);
+        })
+        .catch(() => {
+          if (requestIdRef.current === requestId) setResults([]);
+        });
     }, 250);
     return () => clearTimeout(debounceRef.current);
   }, [value, term, token]);
 
   function pick(combo) {
-    onChange(combo.code);
+    requestIdRef.current++;
+    justPickedRef.current = true;
+    clearTimeout(debounceRef.current);
     setResults([]);
+    onChange(combo.code);
   }
 
   return (
